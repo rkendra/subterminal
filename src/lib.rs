@@ -19,7 +19,7 @@ impl IntoInner<imp::Pty> for Pty {
 impl FromInner<imp::Pty> for Pty {
     fn from_inner(inner: imp::Pty) -> Pty {
         Pty {
-            inner: inner
+            inner
         }
     }
 }
@@ -44,16 +44,16 @@ impl Pty {
 
 impl Read for Pty {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        Ok(self.inner.read(buf)?)
+        self.inner.read(buf)
     }
 }
 
 impl Write for Pty {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        Ok(self.inner.write(buf)?)
+        self.inner.write(buf)
     }
 
     fn flush(&mut self) -> Result<()> {
-        Ok(self.inner.flush()?)
+        self.inner.flush()
     }
 }
