@@ -2,6 +2,8 @@ mod sys;
 
 use crate::sys as imp;
 use crate::sys::{IntoInner, FromInner, AsInner, AsInnerMut};
+use std::io::Result;
+use std::io::prelude::*;
 
 
 pub struct Pty {
@@ -31,5 +33,27 @@ impl AsInner<imp::Pty> for Pty {
 impl AsInnerMut<imp::Pty> for Pty {
     fn as_inner_mut(&mut self) -> &mut imp::Pty {
         &mut self.inner
+    }
+}
+
+impl Pty {
+    pub fn spawn_shell() -> Result<Pty> {
+        Ok(Pty{inner: imp::Pty::spawn_shell()?})
+    }
+}
+
+impl Read for Pty {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        Ok(self.inner.read(buf)?)
+    }
+}
+
+impl Write for Pty {
+    fn write(&mut self, buf: &[u8]) -> Result<usize> {
+        Ok(self.inner.write(buf)?)
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        Ok(self.inner.flush()?)
     }
 }
