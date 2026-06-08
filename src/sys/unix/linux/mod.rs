@@ -1,12 +1,13 @@
 use std::os::fd::*;
 use std::ptr;
-use std::mem::ManuallyDrop;
+
 use std::io::prelude::*;
 use std::io::Result;
 
 pub struct Pty {
-    manager: ManuallyDrop<OwnedFd>,
-    child_pid: i32
+    manager: RawFd,
+    child_pid: i32,
+    out_stream: RawFd
 }
 
 impl Pty {
@@ -15,6 +16,8 @@ impl Pty {
     pub fn spawn_shell() -> Result<Pty> {
         let mut manager: libc::c_int = -1;
         let mut child_pid = -1;
+        // SAFETY: manager was just initialized, and null pointers are properly handled by forkpty
+        // Child process is properly handled in implementation of Drop
         let pid = unsafe {
             libc::forkpty(&mut manager, ptr::null_mut(), ptr::null(), ptr::null())
         };
@@ -23,12 +26,48 @@ impl Pty {
             0 => Pty::execute(std::env::var("SHELL").unwrap(), Vec::<&str>::new())?,
             child => child_pid = child
         }
-        // Have Pty object take ownership of master pty
-        let manager = unsafe {
-            OwnedFd::from_raw_fd(manager)
-        };
 
-        Ok(Pty{ manager: ManuallyDrop::new(manager), child_pid })
+        Ok(Pty{ manager, child_pid, out_stream: manager })
+    }
+
+    pub fn spawn_piped_shell() -> Result<Pty> {
+        let mut manager: libc::c_int = -1;
+        let mut child_pid: i32 = -1;
+        let mut pipe: [libc::c_int; 2] = [-1; 2];
+        // SAFETY: pipe was just declared as an array of two c_ints
+        // which is required by libc::pipe
+        let pipe_res = unsafe {
+            libc::pipe(pipe.as_mut_ptr())
+        };
+        match pipe_res {
+            -1 => return Err(std::io::Error::last_os_error()),
+            _ => {}
+        }
+        // SAFETY: manager was just initialized, and null pointers are properly handled by forkpty
+        // Child process is properly handled in implementation of Drop
+        let pid = unsafe {
+            libc::forkpty(&mut manager, ptr::null_mut(), ptr::null(), ptr::null())
+        };
+        match pid {
+            -1 => return Err(std::io::Error::last_os_error()),
+            0 => {
+                // SAFETY: both pipe fds are guaranteed to be open at this point
+                unsafe {
+                    handle_c_ret(libc::close(pipe[0]))?;
+                    handle_c_ret(libc::dup2(libc::STDOUT_FILENO, pipe[1]))?;
+                }
+                Pty::execute(std::env::var("SHELL").unwrap(), Vec::<&str>::new())?
+            },
+            child => {
+                // SAFETY: pipe[1] is guaranteed to be open at this point
+                unsafe {
+                    handle_c_ret(libc::close(pipe[1]))?
+                }
+                child_pid = child;
+            }
+        }
+
+        Ok(Pty{ manager, child_pid, out_stream: pipe[0] })
     }
 
     // To be only invoked by forked child processes
@@ -44,12 +83,12 @@ impl Pty {
         for i in byte_args {
             arg_ptrs.push(i.as_ptr() as *const i8);
         }
-        let status = unsafe {
-            libc::execvp(cmd.as_ptr() as *const i8, arg_ptrs.as_ptr())
-        };
-        match status {
-            -1 => Err(std::io::Error::last_os_error()),
-            _ => Ok(())
+        // SAFETY: argv[0] is guaranteed to be equal to cmd
+        // All parameters are guaranteed to be valid ASCII at this point (i.e., n <= 128)
+        unsafe {
+            handle_c_ret(
+                libc::execvp(cmd.as_ptr() as *const i8, arg_ptrs.as_ptr())
+            )
         }
     }
 }
@@ -58,8 +97,13 @@ impl std::ops::Drop for Pty {
     fn drop(&mut self) {
         // Closing the fd first causes child process to receive SIGHUP
         // waitpid exists as a sanity check
+        // SAFETY: All RawFds are guaranteed to be open due to being private fields
+        // and guards are in place to prevent double closures
         unsafe {
-            ManuallyDrop::drop(&mut self.manager);
+            if self.out_stream != self.manager {
+                libc::close(self.out_stream);
+            }
+            libc::close(self.manager);
             libc::waitpid(self.child_pid, ptr::null_mut(), 0);
         }
     }
@@ -74,7 +118,7 @@ impl Read for Pty {
         };
         let bytes_read = unsafe { 
             libc::read(
-                self.manager.as_raw_fd(),
+                self.out_stream.as_raw_fd(),
                 buf.as_mut_ptr() as *mut libc::c_void,
                 read_limit
             )
@@ -111,5 +155,19 @@ impl Write for Pty {
     // Empty function as Pty has no buffer
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+impl crate::Echo for Pty {
+    fn echo(&mut self, buf: &[u8]) -> Result<(usize, Option<Vec<u8>>)> {
+        self.write(buf);
+        
+    }
+}
+
+fn handle_c_ret(code: libc::c_int) -> Result<()> {
+    match code {
+        -1 => Err(std::io::Error::last_os_error()),
+        _ => Ok(())
     }
 }

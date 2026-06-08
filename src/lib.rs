@@ -4,10 +4,52 @@ use crate::sys as imp;
 use crate::sys::{IntoInner, FromInner, AsInner, AsInnerMut};
 use std::io::Result;
 use std::io::prelude::*;
+use std::io::Error;
+use std::io::ErrorKind;
 
 
 pub struct Pty {
     inner: imp::Pty,
+}
+
+#[cfg(unix)]
+pub trait Echo: Write {
+    /// Writes a buffer into the underlying writer,
+    /// Returns the amount of bytes written, and an optional vector.
+    /// Should the echo output differ from buf (as is the case with some ANSI escape sequences), Some(output) will be returned, 
+    /// otherwise, None will be returned
+    /// Any error from the underlying write() call should propagate
+    fn echo(&mut self, buf: &[u8]) -> Result<(usize, Option<Vec<u8>>)>;
+
+    // Implementations for the following methods are adapted from the 
+    // method's analogues in std::io::Write
+
+    fn echo_all(&mut self, buf: &[u8]) -> Result<Option<Vec<u8>>> {
+        let mut out = Vec::new();
+        let mut cursor = buf;
+        while !cursor.is_empty() {
+            match self.echo(cursor) {
+                Ok((0, None)) => {
+                    return Err(Error::new(ErrorKind::WriteZero, "Associated fd closed"))
+                }
+                Ok((n, None)) => {
+                    out.extend_from_slice(&cursor[..n]);
+                    cursor = &cursor[n..];
+                }
+                Ok((n, Some(vec))) => {
+                    out.extend_from_slice(&vec[..]);
+                    cursor = &cursor[n..];
+                }
+                Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
+                Err(e) => return Err(e),
+            }
+        }
+        if buf == out {
+            Ok(None)
+        } else {
+            Ok(Some(out))
+        }
+    }
 }
 
 impl IntoInner<imp::Pty> for Pty {
@@ -40,11 +82,6 @@ impl Pty {
     pub fn spawn_shell() -> Result<Pty> {
         Ok(Pty{inner: imp::Pty::spawn_shell()?})
     }
-
-    #[cfg(unix)]
-    pub fn data_readable(&self) -> bool {
-        self.inner.data_readable()
-    }
 }
 
 impl Read for Pty {
@@ -54,11 +91,10 @@ impl Read for Pty {
 }
 
 /// Note for Unix developers:
-/// As only one pipe is created by the OS for a pty, it is recommended
-/// to call data_readable() before performing any write operation, as 
-/// writing will void any buffered readable data. As such, while io::Write 
-/// is fully implemented, use of bulk-writing methods such as write_all and 
-/// write_fmt is generally not recommended.
+/// If reading a terminal's echo output is desired,
+/// it is instead recommended to use the Echo trait, 
+/// as io::Read reads from a pty's underlying process,
+/// not the terminal device itself
 impl Write for Pty {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         self.inner.write(buf)
