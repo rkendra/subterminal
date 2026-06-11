@@ -1,5 +1,6 @@
 use std::os::fd::*;
 use std::ptr;
+use std::mem::MaybeUninit;
 
 use std::io::prelude::*;
 use std::io::Result;
@@ -11,8 +12,8 @@ pub struct Pty {
 }
 
 impl Pty {
-    // Spawns a child process that is connected to a new pseudoterminal
-    // Child process executes the user's default shell
+    /// Spawns a child process that is connected to a new pseudoterminal
+    /// Child process executes the user's default shell
     pub fn spawn_shell() -> Result<Pty> {
         let mut manager: libc::c_int = -1;
         let mut child_pid = -1;
@@ -70,6 +71,20 @@ impl Pty {
         Ok(Pty{ manager, child_pid, out_stream: pipe[0] })
     }
 
+    pub fn get_termios_flags(&self) -> Result<libc::termios> {
+        let mut flags:MaybeUninit<libc::termios> = MaybeUninit::uninit();
+        // SAFETY: tcgetattr is guaranteed to initialize flags when no error occurs
+        unsafe {
+            handle_c_ret(libc::tcgetattr(self.manager, flags.as_mut_ptr()))?;
+            Ok(flags.assume_init())
+        }
+    }
+
+    pub fn set_termios_flags(&mut self, option: i32, flags: libc::termios) -> Result<()> {
+        unsafe {
+            handle_c_ret(libc::tcsetattr(self.manager, option, &flags))
+        }
+    }
     // To be only invoked by forked child processes
     // Executes the program indicated by path
     // Does not return unless an error occured
@@ -89,6 +104,42 @@ impl Pty {
             handle_c_ret(
                 libc::execvp(cmd.as_ptr() as *const i8, arg_ptrs.as_ptr())
             )
+        }
+    }
+
+    pub fn get_raw_pty() -> (OwnedFd, OwnedFd) {
+        let mut master: libc::c_int = -1;
+        let mut slave: libc::c_int = -1;
+        // SAFETY: master and slave were just initialized, so their
+        // pointers are valid, null pointers are handled by openpty
+        unsafe {
+            libc::openpty(&mut master, &mut slave, ptr::null_mut(), ptr::null_mut(), ptr::null_mut());
+        }
+        // SAFETY: master and slave are created in the prior syscall, meaning no other code can access
+        // these fds before ownership is consumed
+        unsafe {
+            (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave))
+        }
+    }
+
+    /// Creates a new terminal session with a new child process that executes cmd
+    /// returns a Pty object that interacts with said process
+    /// # Safety
+    /// This function consumes ownership of master and slave, and closes slave.
+    /// Should master and slave contain the same fd, this will result in undefined behavior
+    pub unsafe fn from_raw_pty(master: OwnedFd, slave: OwnedFd, cmd: String) -> Result<Pty> {
+        let pid = unsafe {
+            libc::fork()
+        };
+        match pid {
+            -1 => return Err(std::io::Error::last_os_error()),
+            0 => {
+                unsafe {
+                    handle_c_ret(libc::login_tty(slave.into_raw_fd()))?
+                }
+                let args = cmd.split(char::is_whitespace).collect();
+                Pty::execute(args[0], args[1..].to_vec)?
+            }
         }
     }
 }
@@ -158,16 +209,28 @@ impl Write for Pty {
     }
 }
 
-impl crate::Echo for Pty {
-    fn echo(&mut self, buf: &[u8]) -> Result<(usize, Option<Vec<u8>>)> {
-        self.write(buf);
+// impl crate::Echo for Pty {
+//     fn echo(&mut self, buf: &[u8]) -> Result<(usize, Option<Vec<u8>>)> {
+//         self.write(buf);
         
-    }
-}
+//     }
+// }
 
 fn handle_c_ret(code: libc::c_int) -> Result<()> {
     match code {
         -1 => Err(std::io::Error::last_os_error()),
         _ => Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_c_error_handler() {
+        assert_eq!(handle_c_ret(-1).is_ok(), false);
+        assert_eq!(handle_c_ret(0).is_ok(), true);
+        assert_eq!(handle_c_ret(27).is_ok(), true);
     }
 }

@@ -82,6 +82,17 @@ impl Pty {
     pub fn spawn_shell() -> Result<Pty> {
         Ok(Pty{inner: imp::Pty::spawn_shell()?})
     }
+
+    #[cfg(unix)]
+    /// Spawns a child process tied to a new pseudoterminal
+    /// which runs the user's default shell. Creates a distinct channel
+    /// that captures output from the child process
+    /// 
+    /// On Windows, pseudoterminals have distinct input and output channels by default, 
+    /// so this function is not included to avoid confusion as it is redundant
+    pub fn spawn_piped_shell() -> Result<Pty> {
+        Ok(Pty{inner: imp::Pty::spawn_piped_shell()?})
+    }
 }
 
 impl Read for Pty {
