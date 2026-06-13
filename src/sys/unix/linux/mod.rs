@@ -8,7 +8,6 @@ use std::io::Result;
 pub struct Pty {
     manager: RawFd,
     child_pid: i32,
-    out_stream: RawFd
 }
 
 impl Pty {
@@ -28,47 +27,7 @@ impl Pty {
             child => child_pid = child
         }
 
-        Ok(Pty{ manager, child_pid, out_stream: manager })
-    }
-
-    pub fn spawn_piped_shell() -> Result<Pty> {
-        let mut manager: libc::c_int = -1;
-        let mut child_pid: i32 = -1;
-        let mut pipe: [libc::c_int; 2] = [-1; 2];
-        // SAFETY: pipe was just declared as an array of two c_ints
-        // which is required by libc::pipe
-        let pipe_res = unsafe {
-            libc::pipe(pipe.as_mut_ptr())
-        };
-        match pipe_res {
-            -1 => return Err(std::io::Error::last_os_error()),
-            _ => {}
-        }
-        // SAFETY: manager was just initialized, and null pointers are properly handled by forkpty
-        // Child process is properly handled in implementation of Drop
-        let pid = unsafe {
-            libc::forkpty(&mut manager, ptr::null_mut(), ptr::null(), ptr::null())
-        };
-        match pid {
-            -1 => return Err(std::io::Error::last_os_error()),
-            0 => {
-                // SAFETY: both pipe fds are guaranteed to be open at this point
-                unsafe {
-                    handle_c_ret(libc::close(pipe[0]))?;
-                    handle_c_ret(libc::dup2(libc::STDOUT_FILENO, pipe[1]))?;
-                }
-                Pty::execute(std::env::var("SHELL").unwrap(), Vec::<&str>::new())?
-            },
-            child => {
-                // SAFETY: pipe[1] is guaranteed to be open at this point
-                unsafe {
-                    handle_c_ret(libc::close(pipe[1]))?
-                }
-                child_pid = child;
-            }
-        }
-
-        Ok(Pty{ manager, child_pid, out_stream: pipe[0] })
+        Ok(Pty{ manager, child_pid })
     }
 
     pub fn get_termios_flags(&self) -> Result<libc::termios> {
@@ -128,6 +87,7 @@ impl Pty {
     /// This function consumes ownership of master and slave, and closes slave.
     /// Should master and slave contain the same fd, this will result in undefined behavior
     pub unsafe fn from_raw_pty(master: OwnedFd, slave: OwnedFd, cmd: String) -> Result<Pty> {
+        let mut child_pid = -1;
         let pid = unsafe {
             libc::fork()
         };
@@ -137,10 +97,12 @@ impl Pty {
                 unsafe {
                     handle_c_ret(libc::login_tty(slave.into_raw_fd()))?
                 }
-                let args = cmd.split(char::is_whitespace).collect();
-                Pty::execute(args[0], args[1..].to_vec)?
-            }
+                let args: Vec<&str> = cmd.split(char::is_whitespace).collect();
+                Pty::execute(args[0].to_string(), args[1..].to_vec())?
+            },
+            child => child_pid = child
         }
+        Ok(Pty{ manager: master.into_raw_fd(), child_pid, })
     }
 }
 
@@ -148,12 +110,8 @@ impl std::ops::Drop for Pty {
     fn drop(&mut self) {
         // Closing the fd first causes child process to receive SIGHUP
         // waitpid exists as a sanity check
-        // SAFETY: All RawFds are guaranteed to be open due to being private fields
-        // and guards are in place to prevent double closures
+        // SAFETY: Manager is guaranteed to be open due to being private
         unsafe {
-            if self.out_stream != self.manager {
-                libc::close(self.out_stream);
-            }
             libc::close(self.manager);
             libc::waitpid(self.child_pid, ptr::null_mut(), 0);
         }
@@ -169,7 +127,7 @@ impl Read for Pty {
         };
         let bytes_read = unsafe { 
             libc::read(
-                self.out_stream.as_raw_fd(),
+                self.manager.as_raw_fd(),
                 buf.as_mut_ptr() as *mut libc::c_void,
                 read_limit
             )

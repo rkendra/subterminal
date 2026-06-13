@@ -7,6 +7,9 @@ use std::io::prelude::*;
 use std::io::Error;
 use std::io::ErrorKind;
 
+#[cfg(unix)]
+use std::os::fd::OwnedFd;
+
 
 pub struct Pty {
     inner: imp::Pty,
@@ -79,19 +82,32 @@ impl AsInnerMut<imp::Pty> for Pty {
 }
 
 impl Pty {
+    /// Spawns a child process that is connected to a new pseudoterminal.
+    /// Child process executes the user's default shell.
     pub fn spawn_shell() -> Result<Pty> {
         Ok(Pty{inner: imp::Pty::spawn_shell()?})
     }
 
     #[cfg(unix)]
-    /// Spawns a child process tied to a new pseudoterminal
-    /// which runs the user's default shell. Creates a distinct channel
-    /// that captures output from the child process
-    /// 
-    /// On Windows, pseudoterminals have distinct input and output channels by default, 
-    /// so this function is not included to avoid confusion as it is redundant
-    pub fn spawn_piped_shell() -> Result<Pty> {
-        Ok(Pty{inner: imp::Pty::spawn_piped_shell()?})
+    /// Creates a new terminal session with a new child process that executes cmd
+    /// and returns a Pty object that interacts with said process.
+    /// # Safety
+    /// This function consumes ownership of master and slave, and closes slave.
+    /// Should master and slave contain the same fd, this will result in undefined behavior.
+    pub unsafe fn from_raw_pty(master: OwnedFd, slave: OwnedFd, cmd: String) -> Result<Pty> {
+        unsafe {
+           Ok(Pty{inner: imp::Pty::from_raw_pty(master, slave, cmd)?})
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn get_termios_flags(&self) -> Result<libc::termios> {
+        self.inner.get_termios_flags()
+    }
+
+    #[cfg(unix)]
+    pub fn set_termios_flags(&mut self, options: i32, flags: libc::termios) -> Result<()> {
+        self.inner.set_termios_flags(options, flags)
     }
 }
 
