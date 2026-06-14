@@ -10,9 +10,18 @@ use std::io::ErrorKind;
 #[cfg(unix)]
 use std::os::fd::OwnedFd;
 
+pub struct PtyIn {
+    inner: imp::PtyIn,
+}
+
+pub struct PtyOut {
+    inner: imp::PtyOut,
+}
 
 pub struct Pty {
     inner: imp::Pty,
+    input: PtyIn,
+    output: PtyOut,
 }
 
 #[cfg(unix)]
@@ -55,37 +64,11 @@ pub trait Echo: Write {
     }
 }
 
-impl IntoInner<imp::Pty> for Pty {
-    fn into_inner(self) -> imp::Pty {
-        self.inner
-    }
-}
-
-impl FromInner<imp::Pty> for Pty {
-    fn from_inner(inner: imp::Pty) -> Pty {
-        Pty {
-            inner
-        }
-    }
-}
-
-impl AsInner<imp::Pty> for Pty {
-    fn as_inner(&self) -> &imp::Pty {
-        &self.inner
-    }
-}
-
-impl AsInnerMut<imp::Pty> for Pty {
-    fn as_inner_mut(&mut self) -> &mut imp::Pty {
-        &mut self.inner
-    }
-}
-
 impl Pty {
     /// Spawns a child process that is connected to a new pseudoterminal.
     /// Child process executes the user's default shell.
-    pub fn spawn_shell() -> Result<Pty> {
-        Ok(Pty{inner: imp::Pty::spawn_shell()?})
+    pub fn spawn_shell(cmd: String) -> Result<Pty> {
+        Ok(Pty{inner: imp::Pty::spawn_shell(cmd)?})
     }
 
     #[cfg(unix)]
@@ -111,7 +94,7 @@ impl Pty {
     }
 }
 
-impl Read for Pty {
+impl Read for PtyOut {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         self.inner.read(buf)
     }
@@ -122,7 +105,7 @@ impl Read for Pty {
 /// it is instead recommended to use the Echo trait, 
 /// as io::Read reads from a pty's underlying process,
 /// not the terminal device itself
-impl Write for Pty {
+impl Write for PtyIn {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         self.inner.write(buf)
     }

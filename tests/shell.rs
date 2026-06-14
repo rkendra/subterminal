@@ -1,10 +1,16 @@
 use subterminal::{self, Pty};
 use std::io::prelude::*;
 use std::fs::File;
+use std::thread;
+use std::sync::atomic;
+use std::sync::Mutex:
 
+fn reader(stop: atomic::AtomicBool) -> std::io::Result<()> {
+    while !stop {
+    
 #[test]
 fn test_basic() -> std::io::Result<()> {
-    let mut shell = Pty::spawn_shell()?;
+    let mut shell = Pty::spawn_shell(String::from("bash"))?;
     println!("Shell instance spawned");
     let expected = "[?2004h]0;ryanj@RYAN-ROG: ~/subterminal[01;32mryanj@RYAN-ROG[00m:[01;34m~/subterminal[00m$ echo hello
 [?2004l

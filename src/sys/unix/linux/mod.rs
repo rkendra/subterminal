@@ -5,15 +5,25 @@ use std::mem::MaybeUninit;
 use std::io::prelude::*;
 use std::io::Result;
 
+pub struct PtyOut {
+    file: RawFd
+}
+
+pub struct PtyIn {
+    file: RawFd
+}
+
 pub struct Pty {
     manager: RawFd,
     child_pid: i32,
+    pub input: PtyIn,
+    pub output: PtyOut
 }
 
 impl Pty {
     /// Spawns a child process that is connected to a new pseudoterminal
     /// Child process executes the user's default shell
-    pub fn spawn_shell() -> Result<Pty> {
+    pub fn spawn_shell(cmd: String) -> Result<Pty> {
         let mut manager: libc::c_int = -1;
         let mut child_pid = -1;
         // SAFETY: manager was just initialized, and null pointers are properly handled by forkpty
@@ -23,11 +33,14 @@ impl Pty {
         };
         match pid {
             -1 => return Err(std::io::Error::last_os_error()),
-            0 => Pty::execute(std::env::var("SHELL").unwrap(), Vec::<&str>::new())?,
+            0 => {
+                let args: Vec<&str> = cmd.split(char::is_whitespace).collect();
+                Pty::execute(args[0].to_string(), args[1..].to_vec())?
+            },
             child => child_pid = child
         }
 
-        Ok(Pty{ manager, child_pid })
+        Ok(Pty{ manager, child_pid, input: PtyIn{file: manager}, output: PtyOut{file: manager} })
     }
 
     pub fn get_termios_flags(&self) -> Result<libc::termios> {
@@ -102,7 +115,8 @@ impl Pty {
             },
             child => child_pid = child
         }
-        Ok(Pty{ manager: master.into_raw_fd(), child_pid, })
+        let master = master.into_raw_fd();
+        Ok(Pty{ manager: master, child_pid, input: PtyIn{file: master}, output: PtyOut{file: master} })
     }
 }
 
@@ -118,7 +132,7 @@ impl std::ops::Drop for Pty {
     }
 }
 
-impl Read for Pty {
+impl Read for PtyOut {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let read_limit = if buf.len() < libc::ssize_t::MAX as usize{
             buf.len()
@@ -127,7 +141,7 @@ impl Read for Pty {
         };
         let bytes_read = unsafe { 
             libc::read(
-                self.manager.as_raw_fd(),
+                self.file,
                 buf.as_mut_ptr() as *mut libc::c_void,
                 read_limit
             )
@@ -140,7 +154,7 @@ impl Read for Pty {
     }
 }
 
-impl Write for Pty {
+impl Write for PtyIn {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let read_limit = if buf.len() < libc::ssize_t::MAX as usize{
             buf.len()
@@ -149,7 +163,7 @@ impl Write for Pty {
         };
         let bytes_written = unsafe { 
             libc::write(
-                self.manager.as_raw_fd(),
+                self.file,
                 buf.as_ptr() as *const libc::c_void,
                 read_limit
             )
