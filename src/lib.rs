@@ -1,7 +1,6 @@
 mod sys;
 
 use crate::sys as imp;
-use crate::sys::{IntoInner, FromInner, AsInner, AsInnerMut};
 use std::io::Result;
 use std::io::prelude::*;
 use std::io::Error;
@@ -20,8 +19,8 @@ pub struct PtyOut {
 
 pub struct Pty {
     inner: imp::Pty,
-    input: PtyIn,
-    output: PtyOut,
+    pub input: PtyIn,
+    pub output: PtyOut,
 }
 
 #[cfg(unix)]
@@ -68,7 +67,9 @@ impl Pty {
     /// Spawns a child process that is connected to a new pseudoterminal.
     /// Child process executes the user's default shell.
     pub fn spawn_shell(cmd: String) -> Result<Pty> {
-        Ok(Pty{inner: imp::Pty::spawn_shell(cmd)?})
+        let inner = imp::Pty::spawn_shell(cmd)?;
+        let (input, output) = inner.get_io();
+        Ok(Pty{ inner, input: PtyIn{inner: input}, output: PtyOut{inner: output}})
     }
 
     #[cfg(unix)]
@@ -79,7 +80,9 @@ impl Pty {
     /// Should master and slave contain the same fd, this will result in undefined behavior.
     pub unsafe fn from_raw_pty(master: OwnedFd, slave: OwnedFd, cmd: String) -> Result<Pty> {
         unsafe {
-           Ok(Pty{inner: imp::Pty::from_raw_pty(master, slave, cmd)?})
+            let inner = imp::Pty::from_raw_pty(master, slave, cmd)?;
+            let (input, output) = inner.get_io();
+            Ok(Pty{ inner, input: PtyIn{inner: input}, output: PtyOut{inner: output}})
         }
     }
 
@@ -92,6 +95,16 @@ impl Pty {
     pub fn set_termios_flags(&mut self, options: i32, flags: libc::termios) -> Result<()> {
         self.inner.set_termios_flags(options, flags)
     }
+
+    pub fn shutdown(&self) {
+        self.inner.shutdown();
+    }
+
+    pub fn enable_raw(&mut self) -> Result<()> {
+        self.inner.enable_raw()?;
+        Ok(())
+    }
+
 }
 
 impl Read for PtyOut {

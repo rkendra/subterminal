@@ -1,34 +1,33 @@
-use subterminal::{self, Pty};
+use subterminal::{self, Pty, PtyIn, PtyOut};
 use std::io::prelude::*;
-use std::fs::File;
 use std::thread;
 use std::sync::atomic;
-use std::sync::Mutex:
+use std::sync::mpsc;
 
-fn reader(stop: atomic::AtomicBool) -> std::io::Result<()> {
-    while !stop {
+fn reader(ostream: &mut PtyOut, stop: &atomic::AtomicBool, tx: mpsc::Sender<Vec<u8>>) -> std::io::Result<()> {
+    while !(stop.load(atomic::Ordering::Relaxed)) {
+        let mut buf: [u8; 4096] = [0; 4096];
+        let bytes_read = ostream.read(&mut buf)?;
+        let vec = buf[..bytes_read].to_vec();
+        tx.send(vec).unwrap();
+    }
+    Ok(())
+}
+        
     
 #[test]
-fn test_basic() -> std::io::Result<()> {
-    let mut shell = Pty::spawn_shell(String::from("bash"))?;
-    println!("Shell instance spawned");
-    let expected = "[?2004h]0;ryanj@RYAN-ROG: ~/subterminal[01;32mryanj@RYAN-ROG[00m:[01;34m~/subterminal[00m$ echo hello
-[?2004l
-hello
-[?2004h]0;ryanj@RYAN-ROG: ~/subterminal[01;32mryanj@RYAN-ROG[00m:[01;34m~/subterminal[00m$ [?2004l
-
-exit
-";
-    let mut output: [u8; 4096] = [0; 4096];
-    let num_read = shell.read(&mut output)?;
-    let input = "echo hello\n".as_bytes();
-    shell.write(input)?;
-    println!("Sent echo command to shell");
-    
-    shell.read(&mut output[num_read..])?;
-    let mut out = File::create("test.out")?;
-    out.write(&output)?;
-    assert_eq!(expected.as_bytes(), &output[..expected.as_bytes().len()]);
-
+fn test_echo() -> std::io::Result<()> {
+    let expected = String::from("hello").into_bytes();
+    let shell = Pty::spawn_shell(String::from("echo hello"))?;
+    let (tx, rx) = mpsc::channel();
+    let mut term_output = shell.output;
+    let stop = atomic::AtomicBool::new(false);
+    thread::scope (|s| {
+        let reader = s.spawn(|| reader(&mut term_output, &stop, tx));
+        let output = rx.recv().unwrap();
+        stop.store(true, atomic::Ordering::Relaxed);
+        let _ = reader.join().unwrap();
+        assert_eq!(expected, output);
+    });
     Ok(())
 }

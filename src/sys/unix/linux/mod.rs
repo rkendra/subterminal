@@ -16,8 +16,6 @@ pub struct PtyIn {
 pub struct Pty {
     manager: RawFd,
     child_pid: i32,
-    pub input: PtyIn,
-    pub output: PtyOut
 }
 
 impl Pty {
@@ -40,7 +38,7 @@ impl Pty {
             child => child_pid = child
         }
 
-        Ok(Pty{ manager, child_pid, input: PtyIn{file: manager}, output: PtyOut{file: manager} })
+        Ok(Pty{ manager, child_pid })
     }
 
     pub fn get_termios_flags(&self) -> Result<libc::termios> {
@@ -79,6 +77,18 @@ impl Pty {
         }
     }
 
+    pub fn enable_raw(&mut self) -> Result<()> {
+        unsafe {
+            let mut term_settings: MaybeUninit<libc::termios> = MaybeUninit::uninit();
+            handle_c_ret(libc::tcgetattr(self.manager, term_settings.as_mut_ptr()))?;
+            let mut term_settings = term_settings.assume_init();
+            term_settings.c_lflag = term_settings.c_lflag & !(libc::ECHO);
+            term_settings.c_lflag = term_settings.c_lflag & !(libc::ICANON);
+            handle_c_ret(libc::tcsetattr(self.manager, libc::TCSANOW, &mut term_settings))?;
+        }
+        Ok(())
+    }
+            
     pub fn get_raw_pty() -> (OwnedFd, OwnedFd) {
         let mut master: libc::c_int = -1;
         let mut slave: libc::c_int = -1;
@@ -116,7 +126,17 @@ impl Pty {
             child => child_pid = child
         }
         let master = master.into_raw_fd();
-        Ok(Pty{ manager: master, child_pid, input: PtyIn{file: master}, output: PtyOut{file: master} })
+        Ok(Pty{ manager: master, child_pid })
+    }
+    
+    pub fn get_io(&self) -> (PtyIn, PtyOut) {
+        return (PtyIn{ file: self.manager }, PtyOut{ file: self.manager })
+    }
+
+    pub fn shutdown(&self) {
+        unsafe {
+            libc::kill(self.child_pid, libc::SIGHUP);
+        }
     }
 }
 
