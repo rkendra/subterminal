@@ -65,9 +65,10 @@ impl Pty {
             byte_args.push(i.into());
         }
         let mut arg_ptrs: Vec<*const i8> = Vec::new();
-        for i in byte_args {
+        for i in byte_args.iter() {
             arg_ptrs.push(i.as_ptr() as *const i8);
         }
+        arg_ptrs.push(std::ptr::null());
         // SAFETY: argv[0] is guaranteed to be equal to cmd
         // All parameters are guaranteed to be valid ASCII at this point (i.e., n <= 128)
         unsafe {
@@ -84,6 +85,7 @@ impl Pty {
             let mut term_settings = term_settings.assume_init();
             term_settings.c_lflag = term_settings.c_lflag & !(libc::ECHO);
             term_settings.c_lflag = term_settings.c_lflag & !(libc::ICANON);
+            term_settings.c_iflag = term_settings.c_iflag & !(libc::IGNCR);
             handle_c_ret(libc::tcsetattr(self.manager, libc::TCSANOW, &mut term_settings))?;
         }
         Ok(())
