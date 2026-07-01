@@ -90,21 +90,6 @@ impl Pty {
         }
         Ok(())
     }
-            
-    pub fn get_raw_pty() -> (OwnedFd, OwnedFd) {
-        let mut master: libc::c_int = -1;
-        let mut slave: libc::c_int = -1;
-        // SAFETY: master and slave were just initialized, so their
-        // pointers are valid, null pointers are handled by openpty
-        unsafe {
-            libc::openpty(&mut master, &mut slave, ptr::null_mut(), ptr::null_mut(), ptr::null_mut());
-        }
-        // SAFETY: master and slave are created in the prior syscall, meaning no other code can access
-        // these fds before ownership is consumed
-        unsafe {
-            (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave))
-        }
-    }
 
     /// Creates a new terminal session with a new child process that executes cmd
     /// returns a Pty object that interacts with said process
