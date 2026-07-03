@@ -18,7 +18,7 @@ fn reader(ostream: &mut PtyOut, stop: &atomic::AtomicBool, tx: mpsc::Sender<Vec<
 #[test]
 fn test_echo() -> std::io::Result<()> {
     let expected = String::from("hello").into_bytes();
-    let shell = Pty::spawn_shell(String::from("echo hello"))?;
+    let shell = Pty::spawn(String::from("echo hello"))?;
     let (tx, rx) = mpsc::channel();
     let mut term_output = shell.output;
     let stop = atomic::AtomicBool::new(false);

@@ -66,8 +66,14 @@ pub trait Echo: Write {
 impl Pty {
     /// Spawns a child process that is connected to a new pseudoterminal.
     /// Child process executes the user's default shell.
-    pub fn spawn_shell(cmd: String) -> Result<Pty> {
-        let inner = imp::Pty::spawn_shell(cmd)?;
+    pub fn spawn(cmd: String) -> Result<Pty> {
+        let inner = imp::Pty::spawn(cmd)?;
+        let (input, output) = inner.get_io();
+        Ok(Pty{ inner, input: PtyIn{inner: input}, output: PtyOut{inner: output}})
+    }
+
+    pub fn spawn_as_user(cmd: &str, uname: &str) -> Result<Pty> {
+        let inner = imp::Pty::spawn_as_user(cmd, uname)?;
         let (input, output) = inner.get_io();
         Ok(Pty{ inner, input: PtyIn{inner: input}, output: PtyOut{inner: output}})
     }

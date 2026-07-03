@@ -3,7 +3,8 @@ use std::ptr;
 use std::mem::MaybeUninit;
 
 use std::io::prelude::*;
-use std::io::Result;
+use std::io::{BufReader, Result};
+use std::fs::File;
 
 pub struct PtyOut {
     file: RawFd
@@ -21,7 +22,7 @@ pub struct Pty {
 impl Pty {
     /// Spawns a child process that is connected to a new pseudoterminal
     /// Child process executes the user's default shell
-    pub fn spawn_shell(cmd: String) -> Result<Pty> {
+    pub fn spawn(cmd: String) -> Result<Pty> {
         let mut manager: libc::c_int = -1;
         let mut child_pid = -1;
         // SAFETY: manager was just initialized, and null pointers are properly handled by forkpty
@@ -40,6 +41,63 @@ impl Pty {
 
         Ok(Pty{ manager, child_pid })
     }
+
+    pub fn spawn_as_user(cmd: &str, uname: &str) -> Result<Pty> {
+        // Get gid and uid of user
+        let passwd = BufReader::new(File::open("/etc/passwd").expect("Failed to open passwd"));
+        let (uid, gid): (u32, u32);
+        let mut lines_iter = passwd.lines();
+        loop {
+            let line = lines_iter.next();
+            match line {
+                None => {
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Requested user does not exist"));
+                }
+                Some(u_data) => match u_data {
+                    Err(err) => {
+                        return Err(err);
+                    }
+                    Ok(user) => {
+                        let user_info: Vec<&str> = user.split(':').collect();
+                        if user_info[0] == uname {
+                            uid = user_info[2].parse().unwrap();
+                            gid = user_info[3].parse().unwrap();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        // Sanity check in case loop above somehow neither finds the user nor returns Err
+        if uid == 0 && gid == 0 && uname != "root" {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Requested user does not exist"))
+        }
+
+        let mut manager: libc::c_int = -1;
+        let mut child_pid = -1;
+        // SAFETY: manager was just initialized, and null pointers are properly handled by forkpty
+        // Child process is properly handled in implementation of Drop
+        let pid = unsafe {
+            libc::forkpty(&mut manager, ptr::null_mut(), ptr::null(), ptr::null())
+        };
+        match pid {
+            -1 => return Err(std::io::Error::last_os_error()),
+            0 => {
+                let args: Vec<&str> = cmd.split(char::is_whitespace).collect();
+                
+                // SAFETY: gid and uid guaranteed to point to valid user/group
+                unsafe {
+                    libc::setgid(gid);
+                    libc::setuid(uid);
+                }
+                Pty::execute(args[0].to_string(), args[1..].to_vec())?
+            },
+            child => child_pid = child
+        }
+
+        Ok(Pty{ manager, child_pid })
+    }
+        
 
     pub fn get_termios_flags(&self) -> Result<libc::termios> {
         let mut flags:MaybeUninit<libc::termios> = MaybeUninit::uninit();
